@@ -214,6 +214,8 @@ onMounted(async () => {
   unsubNotice = onNotice((channel, payload: any) => {
     if (channel === 'solutionChanged' || channel === 'installedChanged') {
       reloadAll();
+      // 安装/卸载/恢复后，间接依赖信息依赖 asset.json 的重建结果；刷新已选中详情面板
+      if (selected.value) detailRefreshKey.value += 1;
     } else if (channel === 'sourcesChanged') {
       // 顶栏 ↔ 对话框 ↔ 列表 三方联动：保证两个控件选中始终一致
       if (payload) {
@@ -232,6 +234,10 @@ onMounted(async () => {
     boot.value = b;
     activeSource.value = b.activeSource;
     includePrerelease.value = !!b.includePrerelease;
+    // 打开面板时默认激活的页签（用户可在设置中配置：浏览 / 已安装 / 更新）
+    if (b.defaultTab === 'browse' || b.defaultTab === 'installed' || b.defaultTab === 'updates') {
+      tab.value = b.defaultTab;
+    }
     await refreshInstalled();
     await refreshUpdates();
     await refreshBrowse();
@@ -269,9 +275,24 @@ async function refreshInstalled() {
       }
     }
   }
-  installedItems.value = Array.from(map.values())
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((v) => ({ id: v.id, version: v.version } as PackageItemData));
+  const list = Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id));
+  installedItems.value = list.map((v) => ({ id: v.id, version: v.version } as PackageItemData));
+  // 后台补包图标（flat-container 模板 URL，无网络请求；404 时列表自动回退默认图标）
+  await attachIcons(list.map((v) => ({ id: v.id, version: v.version })), installedItems.value);
+}
+
+/** 为列表项按 id 补充 iconUrl（后端按 flat-container 模板构造，加载失败由行内回退默认图） */
+async function attachIcons(versions: { id: string; version?: string }[], items: PackageItemData[]) {
+  try {
+    const r = await call<{ icons: Record<string, string | null> }>('getPackageIcons', {
+      packages: versions.filter((v) => v.version && v.version !== '*') as { id: string; version: string }[],
+    });
+    const icons = r?.icons || {};
+    for (const it of items) {
+      const url = icons[it.id];
+      if (url) it.iconUrl = url;
+    }
+  } catch { /* 图标获取失败则保持默认占位图 */ }
 }
 
 async function refreshUpdates() {
@@ -291,6 +312,8 @@ async function refreshUpdates() {
         latest: u.latest,
         isPrerelease: u.isPrerelease,
       }));
+    // 后台补包图标（用当前已装版本构造）
+    await attachIcons(list.map((u) => ({ id: u.id, version: u.current })), updatesItems.value);
   } finally {
     loadingTab.value = null;
   }
@@ -363,8 +386,17 @@ function onTab(t: Tab) {
   if (t === 'browse') refreshBrowse();
 }
 
-function onSearch() {
-  if (tab.value === 'browse') refreshBrowse();
+/** 刷新按钮 / 回车：重载当前激活面板的数据 */
+async function onSearch() {
+  if (tab.value === 'browse') {
+    // 浏览：重新按当前关键词搜索
+    await refreshBrowse();
+    return;
+  }
+  if (!boot.value) return;
+  // 已安装 / 更新 / 合并 的数据均源自解决方案：
+  // 通知后端重新解析 csproj（捕获外部改动），后端随后广播 solutionChanged → 前端 reloadAll 重载当前面板
+  await call('reload');
 }
 
 // 边输入边查（仅在浏览 tab）。debounce 300ms。

@@ -75,7 +75,7 @@ export class NugetPanel {
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this.panel.webview.cspSource} 'unsafe-inline'; img-src ${this.panel.webview.cspSource} data:; script-src ${this.panel.webview.cspSource};" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this.panel.webview.cspSource} 'unsafe-inline'; img-src ${this.panel.webview.cspSource} data: https: http:; script-src ${this.panel.webview.cspSource};" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <base href="${this.panel.webview.asWebviewUri(vscode.Uri.file(distDir))}/" />
   <link rel="stylesheet" href="${cssUri}" />

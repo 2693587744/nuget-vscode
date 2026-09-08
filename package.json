@@ -4,8 +4,12 @@
   "description": "管理与 Visual Studio 2026 一致的解决方案级 NuGet 包管理器",
   "version": "0.1.0",
   "publisher": "local",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:csproj",
@@ -76,8 +80,14 @@
         }
       ],
       "commandPalette": [
-        { "command": "nuget.manageSolution", "when": "true" },
-        { "command": "nuget.restoreSolution", "when": "true" }
+        {
+          "command": "nuget.manageSolution",
+          "when": "true"
+        },
+        {
+          "command": "nuget.restoreSolution",
+          "when": "true"
+        }
       ]
     },
     "configuration": {
@@ -86,8 +96,16 @@
         "nuget-vscode.sources": {
           "type": "array",
           "default": [
-            { "name": "nuget.org", "url": "https://api.nuget.org/v3/index.json", "allowInsecureConnections": false },
-            { "name": "Vzan (Baget)", "url": "http://192.168.30.24:8000/v3/index.json", "allowInsecureConnections": true }
+            {
+              "name": "nuget.org",
+              "url": "https://api.nuget.org/v3/index.json",
+              "allowInsecureConnections": false
+            },
+            {
+              "name": "Vzan (Baget)",
+              "url": "http://192.168.30.24:8000/v3/index.json",
+              "allowInsecureConnections": true
+            }
           ],
           "description": "NuGet 程序包源列表。allowInsecureConnections 为 true 时允许 HTTP 明文连接（仅限内网开发环境）"
         },
@@ -105,6 +123,21 @@
           "type": "boolean",
           "default": false,
           "description": "浏览/已安装/更新 列表中是否包含预发行版（与 VS NuGet 默认一致，不勾选）"
+        },
+        "nuget-vscode.defaultTab": {
+          "type": "string",
+          "enum": [
+            "updates",
+            "browse",
+            "installed"
+          ],
+          "enumDescriptions": [
+            "打开面板时默认显示「更新」页",
+            "打开面板时默认显示「浏览」页",
+            "打开面板时默认显示「已安装」页"
+          ],
+          "default": "browse",
+          "description": "打开 NuGet 面板时默认激活的页签：浏览 / 已安装 / 更新"
         },
         "nuget-vscode.dotnetPath": {
           "type": "string",

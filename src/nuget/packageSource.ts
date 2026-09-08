@@ -345,6 +345,28 @@ function mockPackages(source: SourceConfig, stableOnly: boolean): { id: string; 
   }
 }
 
+/** 为一批 {id, version} 构造 NuGet v3 flat-container 图标 URL。
+ *  模板 `{flatBase}/{id小写}/{version小写}/icon` 是 V3 规范路径（官方搜索 API 返回的
+ *  iconUrl 即此格式），因此无需发起额外网络请求即可拿到候选地址；
+ *  若包没有图标或源不支持该端点，浏览器加载该 URL 会 404，前端 img onerror 自动回退默认图。
+ *  返回 key=调用方原样传入的 id，value=icon URL 或 null（无源/版本缺失无法构造）。 */
+export async function resolveFlatContainerIcons(source: SourceConfig, packages: { id: string; version: string }[]): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  if (!packages.length) return out;
+  let flat: string | undefined;
+  try {
+    flat = (await getServiceIndex(source)).flat;
+  } catch { flat = undefined; }
+  if (!flat) return out;
+  for (const p of packages) {
+    const id = (p.id || '').trim();
+    const ver = (p.version || '').trim();
+    if (!id || !ver || ver === '*') { out[p.id] = null; continue; }
+    out[p.id] = `${flat}/${encodeURIComponent(id.toLowerCase())}/${encodeURIComponent(ver.toLowerCase())}/icon`;
+  }
+  return out;
+}
+
 /** 包的版本列表（flat container） */
 export async function queryPackageVersions(source: SourceConfig, pkgId: string, opts: {
   includePrerelease?: boolean;
@@ -352,16 +374,21 @@ export async function queryPackageVersions(source: SourceConfig, pkgId: string, 
   try {
     const { flat, reg } = await getServiceIndex(source);
     const enc = encodeURIComponent(pkgId.toLowerCase());
-    // 优先 flatcontainer/{id}/index.json；缺失则用 registration5 索引
+    // 优先 flatcontainer/{id}/index.json；缺失则用 registration 索引。
+    // 注意：NuGet v3 规范下 flatcontainer 返回的是 { "versions": [...] } 对象，不是纯数组。
     let versions: string[] | null = null;
     try {
-      versions = await fetchJson<string[]>(`${flat}/${enc}/index.json`, 8000, insecureAllowed(source));
+      const raw = await fetchJson<{ versions: string[] } | string[]>(`${flat}/${enc}/index.json`, 8000, insecureAllowed(source));
+      // 兼容两种结构：标准对象 {versions:[...]} 或个别实现直接返回字符串数组
+      versions = Array.isArray(raw) ? raw : (raw?.versions ?? null);
     } catch {
       if (reg) {
-        // registration 索引：每个 page 含 items[].version
-        const pages = await fetchJson<{ items?: { items?: { version: string }[] }[] }>(`${reg}/${enc}/index.json`, 8000, insecureAllowed(source));
-        versions = [];
-        for (const p of pages.items || []) for (const v of p.items || []) versions.push(v.version);
+        try {
+          // registration 索引：每个 page 含 items[].version
+          const pages = await fetchJson<{ items?: { items?: { version: string }[] }[] }>(`${reg}/${enc}/index.json`, 8000, insecureAllowed(source));
+          versions = [];
+          for (const p of pages.items || []) for (const v of p.items || []) versions.push(v.version);
+        } catch { /* registration 索引也失败时回退为空 */ }
       }
     }
     if (!versions) return { versions: [] };

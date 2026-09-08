@@ -73,7 +73,7 @@
               :key="v.version"
               :value="v.version"
             >
-              {{ v.isPrerelease ? `预发行版 ${v.version}` : `最新发行版 ${v.version}` }}
+              {{ v.isPrerelease ? ` ${v.version}` : ` ${v.version}` }}
             </option>
           </select>
           <button class="primary" :disabled="busy !== null || !version" @click="doInstall">安装</button>
@@ -271,8 +271,14 @@ async function loadFor(id: string) {
       return (a.isPrerelease ? 1 : 0) - (b.isPrerelease ? 1 : 0);
     });
     versions.value = vs;
-    if (!version.value && (props.data?.selectedVersion || versions.value[0]?.version)) {
-      version.value = props.data?.selectedVersion || versions.value[0]?.version;
+    // 每次选中/刷新包时，版本下拉默认选中「当前已安装版本」；
+    // 未安装的包则回退到更新候选列表版本，最后取列表最新版本。
+    const prefer = props.data?.installedVersion
+      || props.data?.selectedVersion
+      || versions.value[0]?.version;
+    if (prefer) {
+      const inList = versions.value.some((v) => v.version === prefer);
+      version.value = inList ? prefer : (versions.value[0]?.version || prefer);
     }
   } catch (e: any) {
     error.value = e?.message || '加载失败';

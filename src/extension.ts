@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { spawn } from 'child_process';
 import { findSolutionFiles, parseSolution, Solution, PackageReference } from './nuget/solution';
-import { SourceConfig, searchPackages, queryAllPackages, queryPackageVersions, compareVersions, getPackageDetails, getPackageReadme, PackageSearchResult } from './nuget/packageSource';
+import { SourceConfig, searchPackages, queryAllPackages, queryPackageVersions, resolveFlatContainerIcons, compareVersions, getPackageDetails, getPackageReadme, PackageSearchResult } from './nuget/packageSource';
 import { buildRefRows, RefRow, installPackage, uninstallPackage } from './nuget/projectGraph';
 import * as sourceManager from './nuget/sourceManager';
 import { NugetPanel } from './webview/nugetPanel';
@@ -19,10 +20,17 @@ function updateSolutionContext(sln: Solution | undefined) {
 
 export async function activate(context: vscode.ExtensionContext) {
   activeContext = context;
-  registerCommands(context);
-  registerSolutionWatcher(context);
-  // 启动时尝试加载工作区中的 sln
-  await tryLoadSolutionFromWorkspace();
+  try {
+    registerCommands(context);
+    registerSolutionWatcher(context);
+    // 启动时尝试加载工作区中的 sln
+    await tryLoadSolutionFromWorkspace();
+  } catch (err) {
+    // 启动阶段任何异常都不能让扩展宿主崩溃，记录并提示
+    const msg = (err as Error)?.message || String(err);
+    console.error('[nuget-vscode] activate failed:', msg);
+    vscode.window.showErrorMessage(`NuGet 扩展启动失败：${msg}`);
+  }
 }
 
 export function deactivate() { /* noop */ }
@@ -143,6 +151,32 @@ async function runDotnetRestore() {
   terminal.sendText(`${dotnet} restore "${sln}"`);
 }
 
+/**
+ * 安装/卸载后，后台静默执行 `dotnet restore`，重建各个项目的 `obj/project.assets.json`，
+ * 使详情面板的「间接依赖」信息得到同步。用 spawn（不弹终端）并监听完成，
+ * restore 成功后重新解析解决方案并再次通知 webview 刷新（含已选中详情面板）。
+ */
+function refreshDependenciesSilent() {
+  const sln = activeSolutionUri?.fsPath || cachedSolution?.absolutePath;
+  if (!sln) return;
+  const cfg = vscode.workspace.getConfiguration('nuget-vscode');
+  let dotnet = cfg.get<string>('dotnetPath') || '';
+  if (!dotnet) dotnet = process.platform === 'win32' ? 'dotnet.exe' : 'dotnet';
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(dotnet, ['restore', sln], { cwd: path.dirname(sln), shell: true });
+  } catch { return; }
+  const timeout = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } }, 180_000);
+  child.on('error', () => clearTimeout(timeout));
+  child.on('exit', async (code) => {
+    clearTimeout(timeout);
+    if (code === 0 && activeSolutionUri) {
+      await loadSolution(activeSolutionUri);
+      NugetPanel.current?.postInstalledChanged();
+    }
+  });
+}
+
 /* =========================================================
  * WebView 端 ↔ Extension 端 消息桥
  * ========================================================= */
@@ -153,12 +187,14 @@ NugetPanel.bus.on('getBootstrapData', async () => {
   const cfg = vscode.workspace.getConfiguration('nuget-vscode');
   const snap = await sourceManager.load();
   const includePrerelease: boolean = cfg.get('includePrerelease') ?? false;
+  const defaultTab = cfg.get<'browse' | 'installed' | 'updates'>('defaultTab') ?? 'updates';
   return {
     solution: serializeSolution(cachedSolution),
     sources: snap.sources,
     activeSource: snap.active,
     defaultSource: snap.default,
     includePrerelease,
+    defaultTab,
   };
 });
 
@@ -294,10 +330,10 @@ NugetPanel.bus.on('getUpdateCandidates', async ({ includePrerelease }: { include
   const candidates: { id: string; current: string; latest: string; isPrerelease?: boolean }[] = [];
   await Promise.all(Array.from(installedIds).map(async (id) => {
     const verList = await queryVersionsAll(id);
-    if (!verList.versions.length) return;
+    if (!verList.length) return;
     // 最新稳定版本
-    const stable = verList.versions.find((v) => !v.isPrerelease);
-    const latest = verList.versions[0]; // 已排序
+    const stable = verList.find((v) => !v.isPrerelease);
+    const latest = verList[0]; // 已排序
     const currentRaw = installedVersion.get(id) || '*';
     // 当前版本归一：'*' 视为 latest
     const current = currentRaw === '*' ? latest.version : currentRaw;
@@ -320,6 +356,21 @@ NugetPanel.bus.on('getUpdateCandidates', async ({ includePrerelease }: { include
   return { items: candidates };
 });
 
+/** 为已安装/可更新列表补齐包图标：按 flat-container 模板构造 icon URL（零网络请求） */
+NugetPanel.bus.on('getPackageIcons', async ({ packages }: { packages: { id: string; version: string }[] }) => {
+  const snap = await sourceManager.load();
+  const srcs = sourceManager.resolveActiveSources(snap.sources, snap.active);
+  const merged: Record<string, string | null> = {};
+  if (!srcs.length || !packages?.length) return { icons: merged };
+  const lists = await Promise.all(srcs.map((s) => resolveFlatContainerIcons(s, packages).catch(() => ({}))));
+  for (const m of lists) {
+    for (const k of Object.keys(m)) {
+      if (m[k] && !merged[k]) merged[k] = m[k];
+    }
+  }
+  return { icons: merged };
+});
+
 NugetPanel.bus.on('getProjectReferencesForPackage', async ({ packageId }: { packageId: string }) => {
   if (!cachedSolution) return { rows: [] as RefRow[] };
   const rows = await buildRefRows(cachedSolution, packageId);
@@ -333,8 +384,10 @@ NugetPanel.bus.on('uninstallPackage', async ({ packageId, project }: { packageId
   const ok = await uninstallPackage(p.absolutePath, packageId);
   if (ok) {
     p.packageReferences = p.packageReferences.filter((r) => r.name.toLowerCase() !== packageId.toLowerCase());
-    // 刷新 webview 视图
+    // 刷新 webview 视图（先刷直接引用）
     NugetPanel.current?.postInstalledChanged();
+    // 后台 restore，重建资产图，同步「间接依赖」信息
+    refreshDependenciesSilent();
   }
   return { ok };
 });
@@ -349,6 +402,8 @@ NugetPanel.bus.on('installPackage', async ({ packageId, version, project }: { pa
   if (existing) existing.version = version;
   else p.packageReferences.push({ name: packageId, version });
   NugetPanel.current?.postInstalledChanged();
+  // 后台 restore，重建资产图，同步「间接依赖」信息（含其它项目对该包的解析版本）
+  refreshDependenciesSilent();
   return { ok: true };
 });
 

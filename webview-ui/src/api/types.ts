@@ -34,6 +34,8 @@ export interface Bootstrap {
   activeSource: string;
   defaultSource: string;
   includePrerelease: boolean;
+  /** 打开面板时默认激活的页签：updates / browse / installed */
+  defaultTab?: string;
 }
 
 export interface PackageItemData {
