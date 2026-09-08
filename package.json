@@ -1,0 +1,134 @@
+{
+  "name": "nuget-vscode",
+  "displayName": "NuGet (Solution)",
+  "description": "管理与 Visual Studio 2026 一致的解决方案级 NuGet 包管理器",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:csproj",
+    "onLanguage:fsproj",
+    "workspaceContains:**/*.sln",
+    "workspaceContains:**/*.csproj",
+    "workspaceContains:**/*.fsproj",
+    "onCommand:nuget.manageSolution",
+    "onView:solutionExplorer"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "nuget.manageSolution",
+        "title": "管理解决方案的 NuGet 程序包(N)...",
+        "category": "NuGet",
+        "icon": "$(package)"
+      },
+      {
+        "command": "nuget.restoreSolution",
+        "title": "还原 NuGet 包(G)",
+        "category": "NuGet",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nuget.openPackageSourceSettings",
+        "title": "配置程序包源...",
+        "category": "NuGet"
+      },
+      {
+        "command": "nuget.openPackageSourceManager",
+        "title": "管理程序包源(M)...",
+        "category": "NuGet",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nuget.setActiveSource",
+        "title": "设置当前程序包源",
+        "category": "NuGet"
+      },
+      {
+        "command": "nuget.togglePrerelease",
+        "title": "包含预发行版",
+        "category": "NuGet"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "nuget.manageSolution",
+          "when": "resourceFilename =~ /\\.sln$/",
+          "group": "7_modification"
+        },
+        {
+          "command": "nuget.manageSolution",
+          "when": "resourceFilename =~ /\\.(csproj|fsproj)$/",
+          "group": "7_modification"
+        },
+        {
+          "command": "nuget.manageSolution",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
+        {
+          "command": "nuget.restoreSolution",
+          "when": "resourceFilename =~ /\\.sln$/",
+          "group": "7_modification"
+        }
+      ],
+      "commandPalette": [
+        { "command": "nuget.manageSolution", "when": "true" },
+        { "command": "nuget.restoreSolution", "when": "true" }
+      ]
+    },
+    "configuration": {
+      "title": "NuGet",
+      "properties": {
+        "nuget-vscode.sources": {
+          "type": "array",
+          "default": [
+            { "name": "nuget.org", "url": "https://api.nuget.org/v3/index.json", "allowInsecureConnections": false },
+            { "name": "Vzan (Baget)", "url": "http://192.168.30.24:8000/v3/index.json", "allowInsecureConnections": true }
+          ],
+          "description": "NuGet 程序包源列表。allowInsecureConnections 为 true 时允许 HTTP 明文连接（仅限内网开发环境）"
+        },
+        "nuget-vscode.activeSource": {
+          "type": "string",
+          "default": "nuget.org",
+          "description": "当前激活的程序包源；值为 __all__ 时表示全部源"
+        },
+        "nuget-vscode.defaultSource": {
+          "type": "string",
+          "default": "nuget.org",
+          "description": "默认程序包源，打开面板时自动选中；值为 __all__ 时表示全部源"
+        },
+        "nuget-vscode.includePrerelease": {
+          "type": "boolean",
+          "default": false,
+          "description": "浏览/已安装/更新 列表中是否包含预发行版（与 VS NuGet 默认一致，不勾选）"
+        },
+        "nuget-vscode.dotnetPath": {
+          "type": "string",
+          "default": "",
+          "description": "dotnet CLI 可执行文件绝对路径；留空时按 PATH 查找"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build:webview": "vite build --config webview-ui/vite.config.ts",
+    "build:ext": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --format=cjs",
+    "build": "npm run build:webview && npm run build:ext",
+    "watch:webview": "vite build --config webview-ui/vite.config.ts --watch",
+    "watch:ext": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --format=cjs --watch"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vue": "^3.4.0"
+  }
+}
