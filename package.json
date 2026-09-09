@@ -2,6 +2,10 @@
   "name": "nuget-vscode",
   "displayName": "NuGet (Solution)",
   "description": "管理与 Visual Studio 2026 一致的解决方案级 NuGet 包管理器",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/2693587744/nuget-vscode.git"
+  },
   "version": "0.1.0",
   "publisher": "MAXMA",
   "engines": {
