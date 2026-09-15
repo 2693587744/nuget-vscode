@@ -67,6 +67,69 @@
 - 「还原」等部分操作依赖 `dotnet` CLI（自动检测，或用 `nuget-vscode.dotnetPath` 显式指定）
 - 内网 HTTP 源需在源配置中显式开启 `allowInsecureConnections`
 
+## 本地开发与调试
+
+### 前置要求
+
+- Node.js 18+（推荐 20+）与 npm
+- VS Code `^1.85.0`
+
+### 1. 安装依赖
+
+根目录与 `webview-ui` 子包依赖相互独立，需要分别安装：
+
+```bash
+npm install
+cd webview-ui && npm install
+```
+
+### 2. 构建
+
+```bash
+npm run build
+```
+
+| 脚本 | 作用 |
+| ---- | ---- |
+| `npm run build:webview` | 用 Vite 构建 Webview UI 到 `dist/webview` |
+| `npm run build:ext` | 用 esbuild 打包扩展主进程到 `dist/extension.js` |
+| `npm run build` | 上述两步（默认构建任务） |
+| `npm run watch:webview` | Webview 监听模式，改动自动重建 |
+| `npm run watch:ext` | 扩展主进程监听模式，改动自动重建 |
+
+### 3. 启动调试（推荐）
+
+1. 用 VS Code 打开本仓库目录（`nuget-vscode`）。
+2. 按 <kbd>F5</kbd>，或在「运行和调试」面板选择 **Run NuGet Extension**（对应 `.vscode/launch.json`）。
+   - 会先自动执行默认构建任务 `npm run build`
+   - 随后弹出「扩展开发宿主」窗口，扩展即在该窗口中生效
+3. 在宿主窗口里打开任意包含 `.sln` / `.slnx` / `.csproj` 的项目，在资源管理器中右键选择 **「管理解决方案的 NuGet 程序包(N)...」** 即可打开面板。
+
+> `.vscode/launch.json` 中 `args` 的第二个参数是"联动打开的测试项目目录"，默认指向一个本地示例项目。请把它改成你自己的解决方案目录，或删除该参数（宿主将打开空窗口，手动打开项目即可）。
+
+### 4. 修改代码后如何生效
+
+- **扩展主进程（`src/`）**：保存后重新按 <kbd>F5</kbd>，或在宿主窗口执行 `Developer: Reload Window`。
+- **Webview UI（`webview-ui/`）**：需重新生成产物。建议开两个监听终端：
+  - 终端 1：`npm run watch:webview`
+  - 终端 2：`npm run watch:ext`
+  - 然后在宿主窗口执行 `Developer: Reload Window`。
+
+### 5. 调试 Webview 界面
+
+在**扩展开发宿主窗口**（不是本仓库窗口）中执行：
+
+- 命令面板 → `Developer: Toggle Developer Tools`，可查看 Webview 的 Console 报错、网络请求与 DOM。
+- 主进程日志可打开「输出」面板，选择 `NuGet` 相关频道查看。
+
+### 6. 打包为 VSIX 安装验证
+
+```bash
+npx @vscode/vsce package
+```
+
+然后在 VS Code 扩展面板右上角 `...` → **Install from VSIX…** 选择生成的 `nuget-vscode-x.y.z.vsix`，重载窗口即可（适合在不启动调试宿主的日常环境中验证）。
+
 ## 反馈与支持
 
 如遇问题或想提建议，欢迎在仓库提交 issue。若面板无法加载，请先检查所选程序包源是否可达、是否需要开启 `allowInsecureConnections`。
