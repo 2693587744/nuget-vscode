@@ -62,7 +62,7 @@
     </div>
 
     <!-- Body -->
-    <div class="nu-body">
+    <div class="nu-body" ref="bodyEl">
       <div class="nu-list-pane">
         <!-- Updates -->
         <template v-if="tab === 'updates'">
@@ -147,7 +147,15 @@
         </template>
       </div>
 
-      <div v-if="selected" class="nu-detail-pane" style="flex: 0 0 480px">
+      <!-- 拖动调整详情面板宽度（双击恢复默认） -->
+      <div
+        v-if="selected"
+        class="nu-resizer"
+        title="拖动调整宽度，双击恢复默认"
+        @mousedown.prevent="startResize"
+        @dblclick="resetDetailWidth"
+      ></div>
+      <div v-if="selected" class="nu-detail-pane" :style="{ flex: `0 0 ${detailWidth}px` }">
         <DetailPanel :data="detailData" :onAfterChange="onAfterChange" :onClose="closeDetail" />
       </div>
     </div>
@@ -201,6 +209,54 @@ function setupBrowseObserver() {
   browseObserver.observe(browseSentinel.value);
 }
 
+/** 详情面板宽度（可拖动调整） */
+const DEFAULT_DETAIL_WIDTH = 480;
+const MIN_DETAIL_WIDTH = 320;
+/** 拖动时左侧列表至少保留的宽度 */
+const MIN_LIST_WIDTH = 280;
+
+const bodyEl = ref<HTMLElement | null>(null);
+const detailWidth = ref(DEFAULT_DETAIL_WIDTH);
+const resizing = ref(false);
+
+/** 限制详情面板宽度：不小于 MIN_DETAIL_WIDTH，且给列表留够 MIN_LIST_WIDTH */
+function clampDetailWidth(w: number): number {
+  const total = bodyEl.value?.clientWidth || window.innerWidth;
+  const max = Math.max(MIN_DETAIL_WIDTH, total - MIN_LIST_WIDTH);
+  return Math.min(Math.max(w, MIN_DETAIL_WIDTH), max);
+}
+
+/** 按下分割条：面板在右侧，向左拖动变宽 */
+function startResize(e: MouseEvent) {
+  if (resizing.value) return;
+  resizing.value = true;
+  const startX = e.clientX;
+  const startWidth = detailWidth.value;
+  document.body.classList.add('nu-resizing');
+
+  const onMove = (ev: MouseEvent) => {
+    detailWidth.value = clampDetailWidth(startWidth + (startX - ev.clientX));
+  };
+  const onUp = () => {
+    resizing.value = false;
+    document.body.classList.remove('nu-resizing');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+}
+
+/** 双击分割条恢复默认宽度 */
+function resetDetailWidth() {
+  detailWidth.value = clampDetailWidth(DEFAULT_DETAIL_WIDTH);
+}
+
+/** 窗口尺寸变化后重新收敛宽度，避免列表被挤没 */
+function onWindowResize() {
+  detailWidth.value = clampDetailWidth(detailWidth.value);
+}
+
 const selected = ref<PackageItemData | null>(null);
 const detailRefreshKey = ref(0);
 const loadingTab = ref<Tab | null>(null);
@@ -210,6 +266,7 @@ const checked = ref<Set<string>>(new Set());
 let unsubNotice: (() => void) | null = null;
 
 onMounted(async () => {
+  window.addEventListener('resize', onWindowResize);
   // 先注册通知监听，避免在 await bootstrap 期间错过 sourcesChanged
   unsubNotice = onNotice((channel, payload: any) => {
     if (channel === 'solutionChanged' || channel === 'installedChanged') {
@@ -246,6 +303,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (unsubNotice) unsubNotice();
+  window.removeEventListener('resize', onWindowResize);
 });
 
 async function reloadAll() {
