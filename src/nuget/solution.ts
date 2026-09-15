@@ -56,7 +56,7 @@ export async function findSolutionFiles(root: string, max = 5): Promise<string[]
       if (e.isDirectory()) {
         if (e.name === 'node_modules' || e.name === '.vs' || e.name.startsWith('.')) continue;
         stack.push(full);
-      } else if (e.isFile() && e.name.toLowerCase().endsWith('.sln')) {
+      } else if (e.isFile() && /\.(sln|slnx)$/i.test(e.name)) {
         out.push(full);
         if (out.length >= max) break;
       }
@@ -65,11 +65,44 @@ export async function findSolutionFiles(root: string, max = 5): Promise<string[]
   return out;
 }
 
-/** 解析 .sln，得到所有 csproj/fsproj 等 */
+/** 解析 .sln / .slnx，得到所有 csproj/fsproj 等 */
 export async function parseSolution(slnPath: string, workspaceRoot: string): Promise<Solution> {
   const raw = await fs.readFile(slnPath, 'utf8');
-  const projects = parseSlnContent(raw, slnPath, workspaceRoot);
-  // 读取 csproj 信息（最佳努力）
+  const ext = path.extname(slnPath).toLowerCase();
+  const projects = ext === '.slnx'
+    ? parseSlnxContent(raw, slnPath)
+    : parseSlnContent(raw, slnPath, workspaceRoot);
+  await hydrateProjects(projects);
+  return {
+    absolutePath: slnPath,
+    relativeRoot: workspaceRoot,
+    name: path.basename(slnPath, ext),
+    projects,
+  };
+}
+
+/** 把单个项目文件（csproj/fsproj/vbproj）包装为"单项目解决方案"，用于未找到 .sln/.slnx 时兜底 */
+export async function createProjectSolution(projectPath: string, workspaceRoot: string): Promise<Solution> {
+  const kind = kindFromExt(path.extname(projectPath)) || 'csproj';
+  const name = path.basename(projectPath, path.extname(projectPath));
+  const projects: SolutionProject[] = [{
+    name,
+    relativePath: path.basename(projectPath),
+    absolutePath: projectPath,
+    kind,
+    packageReferences: [],
+  }];
+  await hydrateProjects(projects);
+  return {
+    absolutePath: projectPath,
+    relativeRoot: workspaceRoot,
+    name,
+    projects,
+  };
+}
+
+/** 读取每个项目的 TFM / OutputType / PackageReference（最佳努力） */
+async function hydrateProjects(projects: SolutionProject[]): Promise<void> {
   for (const p of projects) {
     try {
       const proj = await parseProject(p.absolutePath);
@@ -77,16 +110,38 @@ export async function parseSolution(slnPath: string, workspaceRoot: string): Pro
       p.targetFramework = proj.targetFramework;
       p.targetFrameworks = proj.targetFrameworks;
       p.packageReferences = proj.packageReferences;
-    } catch (err) {
+    } catch {
       // 忽略，保留占位
     }
   }
-  return {
-    absolutePath: slnPath,
-    relativeRoot: workspaceRoot,
-    name: path.basename(slnPath, '.sln'),
-    projects,
-  };
+}
+
+/** 解析 .slnx（新版 XML 解决方案）文本到项目 */
+function parseSlnxContent(content: string, slnxPath: string): SolutionProject[] {
+  const projects: SolutionProject[] = [];
+  let doc: xml2jsLite.Node;
+  try {
+    doc = xml2jsLite.parseDocument(content);
+  } catch {
+    return projects;
+  }
+  // <Project Path="src/Foo/Foo.csproj" />（可能嵌套在 <Folder> 下）
+  for (const node of xml2jsLite.findAll(doc, 'Project')) {
+    const relRaw = node.attrs['Path'] || node.attrs['path'] || '';
+    if (!relRaw) continue;
+    const rel = relRaw.replace(/[\\/]+/g, path.sep);
+    const ext = path.extname(rel);
+    const kind = kindFromExt(ext);
+    if (!kind) continue;
+    projects.push({
+      name: path.basename(rel, ext),
+      relativePath: rel,
+      absolutePath: path.resolve(path.dirname(slnxPath), rel),
+      kind,
+      packageReferences: [],
+    });
+  }
+  return projects;
 }
 
 /** 解析 .sln 文本到项目（不考虑 csproj 内容） */
@@ -121,11 +176,18 @@ function resolveKind(typeGuid: string, ext: string): ProjectKind | null {
     return 'sdk'; // SDK style
   }
   // 兜底：根据后缀
-  if (ext === '.csproj') return 'csproj';
-  if (ext === '.fsproj') return 'fsproj';
-  if (ext === '.vbproj') return 'vbproj';
-  if (ext === '.shproj') return 'shproj';
-  return null;
+  return kindFromExt(ext);
+}
+
+/** 按文件后缀判断项目类型（.slnx 无 GUID，只靠后缀） */
+function kindFromExt(ext: string): ProjectKind | null {
+  switch (ext.toLowerCase()) {
+    case '.csproj': return 'csproj';
+    case '.fsproj': return 'fsproj';
+    case '.vbproj': return 'vbproj';
+    case '.shproj': return 'shproj';
+    default: return null;
+  }
 }
 
 /** 解析 csproj：TFMs、OutputType、PackageReference */

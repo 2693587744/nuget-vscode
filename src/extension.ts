@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { spawn } from 'child_process';
-import { findSolutionFiles, parseSolution, Solution, PackageReference } from './nuget/solution';
+import { findSolutionFiles, parseSolution, createProjectSolution, Solution, PackageReference } from './nuget/solution';
 import { SourceConfig, searchPackages, queryAllPackages, queryPackageVersions, resolveFlatContainerIcons, compareVersions, getPackageDetails, getPackageReadme, PackageSearchResult } from './nuget/packageSource';
 import { buildRefRows, RefRow, installPackage, uninstallPackage } from './nuget/projectGraph';
 import * as sourceManager from './nuget/sourceManager';
@@ -38,19 +38,23 @@ export function deactivate() { /* noop */ }
 function registerCommands(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('nuget.manageSolution', async (uri?: vscode.Uri) => {
-      let slnUri = uri || activeSolutionUri;
-      if (!slnUri) {
-        // 备份探测工作区 sln
+      // 右键传入的可能是 .sln/.slnx、项目文件或文件夹：先定位所属解决方案
+      let slnUri = uri ? await resolveSolutionUri(uri) : undefined;
+      if (!slnUri && !uri) {
+        // 命令面板调用：探测工作区中的解决方案
         await tryLoadSolutionFromWorkspace();
         slnUri = activeSolutionUri;
+      }
+      if (!slnUri && uri && isProjectFile(uri.fsPath)) {
+        // 上级目录没有解决方案：以该右键项目为"单项目解决方案"
+        slnUri = uri;
       }
       if (!slnUri) {
         const wsFolders = vscode.workspace.workspaceFolders || [];
         for (const f of wsFolders) {
           const found = await findSolutionFiles(f.uri.fsPath, 3);
           if (found.length) {
-            activeSolutionUri = vscode.Uri.file(found[0]);
-            slnUri = activeSolutionUri;
+            slnUri = vscode.Uri.file(found[0]);
             break;
           }
         }
@@ -59,13 +63,10 @@ function registerCommands(context: vscode.ExtensionContext) {
         const picked = await vscode.window.showOpenDialog({
           canSelectFiles: true,
           canSelectMany: false,
-          filters: { 'Solution': ['sln'] },
-          title: '选择解决方案文件 (.sln)',
+          filters: { 'Solution': ['sln', 'slnx'] },
+          title: '选择解决方案文件 (.sln / .slnx)',
         });
-        if (picked && picked[0]) {
-          activeSolutionUri = picked[0];
-          slnUri = picked[0];
-        }
+        if (picked && picked[0]) slnUri = picked[0];
       }
       if (!slnUri) { vscode.window.showInformationMessage('未选择解决方案。'); return; }
       await loadSolution(slnUri);
@@ -80,7 +81,7 @@ function registerCommands(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('nuget.openPackageSourceManager', async () => {
       // 确保 webview 已创建，然后让前端调 getSources 拿到当前列表
       await tryLoadSolutionFromWorkspace();
-      await loadSolution(activeSolutionUri || vscode.Uri.file(''));
+      if (activeSolutionUri) await loadSolution(activeSolutionUri);
       NugetPanel.showOrCreate(context);
       NugetPanel.current?.focus();
     }),
@@ -104,17 +105,25 @@ function registerSolutionWatcher(context: vscode.ExtensionContext) {
   }));
 }
 
-/** 自动发现工作区的 sln */
+/** 自动发现工作区的 .sln/.slnx；一个都没有时退化到首个项目文件 */
 async function tryLoadSolutionFromWorkspace() {
   const wsFolders = vscode.workspace.workspaceFolders || [];
   if (!wsFolders.length) { updateSolutionContext(undefined); return; }
   const root = wsFolders[0].uri.fsPath;
   const files = await findSolutionFiles(root, 3);
-  if (!files.length) { updateSolutionContext(undefined); return; }
+  if (!files.length) {
+    // 没有解决方案文件：以工作区内首个项目（csproj/fsproj/vbproj）作为单项目方案
+    const proj = await findFirstProject(root);
+    if (!proj) { updateSolutionContext(undefined); return; }
+    if (!cachedSolution || cachedSolution.absolutePath !== proj) {
+      await loadSolution(vscode.Uri.file(proj));
+    }
+    return;
+  }
   if (files.length === 1) {
     activeSolutionUri = vscode.Uri.file(files[0]);
   } else {
-    // 多个 .sln 让用户选
+    // 多个解决方案让用户选
     const picked = await vscode.window.showQuickPick(files.map((f) => ({ label: path.basename(f), description: f, target: f })));
     if (!picked) return;
     activeSolutionUri = vscode.Uri.file(picked.target);
@@ -125,15 +134,89 @@ async function tryLoadSolutionFromWorkspace() {
   }
 }
 
-async function loadSolution(uri: vscode.Uri) {
+/** 加载解决方案；传入项目文件时退化为"单项目解决方案" */
+async function loadSolution(uri: vscode.Uri | undefined) {
+  if (!uri || !uri.fsPath) return;
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(uri.fsPath);
   try {
-    const sln = await parseSolution(uri.fsPath, wsRoot);
+    const ext = path.extname(uri.fsPath).toLowerCase();
+    const sln = (ext === '.sln' || ext === '.slnx')
+      ? await parseSolution(uri.fsPath, wsRoot)
+      : await createProjectSolution(uri.fsPath, wsRoot);
+    activeSolutionUri = uri;
     updateSolutionContext(sln);
     if (NugetPanel.current) NugetPanel.current.postSolutionChanged();
   } catch (e) {
     vscode.window.showErrorMessage(`解析解决方案失败：${(e as Error).message}`);
   }
+}
+
+function isProjectFile(p: string): boolean {
+  return /\.(csproj|fsproj|vbproj|shproj)$/i.test(p);
+}
+
+async function isDirectory(p: string): Promise<boolean> {
+  try { return (await fs.stat(p)).isDirectory(); } catch { return false; }
+}
+
+/** 仅查找某目录同级（不递归）的 .sln/.slnx */
+async function findSolutionInDir(dir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isFile() && /\.(sln|slnx)$/i.test(e.name))
+      .map((e) => path.join(dir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+/** 由右键对象（解决方案 / 项目 / 文件夹）向上定位所属解决方案 */
+async function resolveSolutionUri(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
+  const fsPath = uri.fsPath;
+  const ext = path.extname(fsPath).toLowerCase();
+  if (ext === '.sln' || ext === '.slnx') return uri;
+
+  const startDir = (await isDirectory(fsPath)) ? fsPath : path.dirname(fsPath);
+  const wsFolder = vscode.workspace.getWorkspaceFolder(uri);
+  const stopDir = wsFolder?.uri.fsPath ? path.resolve(wsFolder.uri.fsPath) : path.parse(startDir).root;
+
+  let cur = path.resolve(startDir);
+  while (true) {
+    const found = await findSolutionInDir(cur);
+    if (found.length === 1) return vscode.Uri.file(found[0]);
+    if (found.length > 1) {
+      const picked = await vscode.window.showQuickPick(found.map((f) => ({ label: path.basename(f), description: f, target: f })));
+      return picked ? vscode.Uri.file(picked.target) : undefined;
+    }
+    if (cur === stopDir) break;
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return undefined;
+}
+
+/** 在工作区中查找首个项目文件（跳过常见输出/隐藏目录） */
+async function findFirstProject(root: string): Promise<string | undefined> {
+  const stack: string[] = [root];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    let entries: import('fs').Dirent[];
+    try {
+      entries = await fs.readdir(cur, { withFileTypes: true });
+    } catch { continue; }
+    for (const e of entries) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) {
+        if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === 'bin' || e.name === 'obj') continue;
+        stack.push(full);
+      } else if (e.isFile() && isProjectFile(e.name)) {
+        return full;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** 调用 dotnet 还原（如果可用） */

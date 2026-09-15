@@ -10,8 +10,8 @@ export interface Node {
   text?: string; // 文本内容（合并子文本节点）
 }
 
-/** 解析 XML 文本。容错：忽略 <??>，跳过 DOCTYPE、注释；不依赖外部库 */
-export function parse(xml: string): Node {
+/** 解析 XML 文本并返回真正的根元素（不做 csproj 专用兜底）。容错：忽略 <??>，跳过 DOCTYPE、注释；不依赖外部库 */
+export function parseDocument(xml: string): Node {
   // 去除 BOM
   xml = xml.replace(/^\uFEFF/, '');
   let i = 0;
@@ -136,16 +136,20 @@ export function parse(xml: string): Node {
     break;
   }
   skipWs();
-  const root = readElement();
-  // 找到最初的项目根（去除可能在前的 xmlns 占位）
-  return nodeOrRealRoot(root);
+  return readElement();
+}
 
-  function nodeOrRealRoot(n: Node): Node {
-    if (!n.children.length) return n;
-    // 通常根节点就是 <Project>
-    if (n.tag === 'Project') return n;
-    return n.children[0];
-  }
+/** 兼容 csproj：若根节点不是 <Project>（例如被外层元素包裹），退回到第一个子节点 */
+function nodeOrRealRoot(n: Node): Node {
+  if (!n.children.length) return n;
+  // 通常根节点就是 <Project>
+  if (n.tag === 'Project') return n;
+  return n.children[0];
+}
+
+/** 解析 csproj/fsproj 文本（保留历史行为：尽量返回 <Project> 根节点） */
+export function parse(xml: string): Node {
+  return nodeOrRealRoot(parseDocument(xml));
 }
 
 /** 按路径查找第一个节点，例如 "PropertyGroup/TargetFramework" */

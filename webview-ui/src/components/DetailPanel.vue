@@ -25,8 +25,11 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-if="rows.length === 0">
+            <tr v-if="rowsLoading">
               <td :colspan="4" style="text-align: center; color: var(--text-mute);">加载中…</td>
+            </tr>
+            <tr v-else-if="rows.length === 0">
+              <td :colspan="4" style="text-align: center; color: var(--text-mute);">未在任何项目中引用</td>
             </tr>
             <tr v-for="r in rows" :key="r.project">
               <td>
@@ -169,7 +172,7 @@ interface PackageDetailData {
   selectedVersion?: string;
   refreshKey?: number;
   /** 搜索结果自带的元数据（立即展示，不等后端 getPackageMetadata） */
-  metaPreview?: Partial<PackageMetadata> | null;
+  metaPreview?: Partial<PackageMetadata & { versions?: { version: string; downloads: number }[] }> | null;
 }
 
 const props = defineProps<{
@@ -178,6 +181,7 @@ const props = defineProps<{
 }>();
 
 const rows = ref<RefRow[]>([]);
+const rowsLoading = ref(false);
 const versions = ref<PackageVersionsResult[]>([]);
 const version = ref<string>('');
 const busy = ref<'uninstall' | 'install' | null>(null);
@@ -241,6 +245,8 @@ function formatDate(iso: string): string {
 
 async function loadFor(id: string) {
   error.value = null;
+  rowsLoading.value = true;
+  rows.value = [];
   try {
     const r = await call<{ rows: RefRow[] }>('getProjectReferencesForPackage', { packageId: id });
     rows.value = r?.rows || [];
@@ -282,6 +288,8 @@ async function loadFor(id: string) {
     }
   } catch (e: any) {
     error.value = e?.message || '加载失败';
+  } finally {
+    rowsLoading.value = false;
   }
 }
 
@@ -312,6 +320,7 @@ watch(
   async ([id]) => {
     if (!id) {
       rows.value = [];
+      rowsLoading.value = false;
       versions.value = [];
       meta.value = null;
       readme.value = '';

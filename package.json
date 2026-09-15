@@ -6,7 +6,7 @@
     "type": "git",
     "url": "https://github.com/2693587744/nuget-vscode.git"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "MAXMA",
   "engines": {
     "vscode": "^1.85.0"
@@ -19,6 +19,7 @@
     "onLanguage:csproj",
     "onLanguage:fsproj",
     "workspaceContains:**/*.sln",
+    "workspaceContains:**/*.slnx",
     "workspaceContains:**/*.csproj",
     "workspaceContains:**/*.fsproj",
     "onCommand:nuget.manageSolution",
@@ -64,7 +65,7 @@
       "explorer/context": [
         {
           "command": "nuget.manageSolution",
-          "when": "resourceFilename =~ /\\.sln$/",
+          "when": "resourceFilename =~ /\\.(sln|slnx)$/",
           "group": "7_modification"
         },
         {
@@ -79,7 +80,7 @@
         },
         {
           "command": "nuget.restoreSolution",
-          "when": "resourceFilename =~ /\\.sln$/",
+          "when": "resourceFilename =~ /\\.(sln|slnx)$/",
           "group": "7_modification"
         }
       ],
