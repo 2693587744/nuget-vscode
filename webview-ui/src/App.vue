@@ -148,7 +148,7 @@
       </div>
 
       <div v-if="selected" class="nu-detail-pane" style="flex: 0 0 480px">
-        <DetailPanel :data="detailData" :onAfterChange="onAfterChange" />
+        <DetailPanel :data="detailData" :onAfterChange="onAfterChange" :onClose="closeDetail" />
       </div>
     </div>
   </div>
@@ -450,6 +450,11 @@ async function onSourcesChanged() {
 
 function select(it: PackageItemData) {
   selected.value = it;
+}
+
+/** 关闭详情面板（右侧栏收起，列表铺满） */
+function closeDetail() {
+  selected.value = null;
 }
 
 async function onAfterChange() {

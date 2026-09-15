@@ -5,6 +5,7 @@
       <div class="icon" v-else>📦</div>
       <div class="name">{{ meta?.title || data?.id || '' }}</div>
       <span v-if="meta?.version" class="nu-detail-version">{{ meta.version }}</span>
+      <button class="nu-detail-close" title="关闭" @click="onClose?.()">✕</button>
     </div>
 
     <div v-if="!data" class="nu-empty col">
@@ -178,6 +179,8 @@ interface PackageDetailData {
 const props = defineProps<{
   data: PackageDetailData | null;
   onAfterChange: () => void;
+  /** 点击详情面板右上角关闭按钮的回调（由父组件清空选中项） */
+  onClose?: () => void;
 }>();
 
 const rows = ref<RefRow[]>([]);
@@ -414,6 +417,22 @@ async function onProjectCheck(row: RefRow, checked: boolean) {
 }
 .nu-detail-version {
   color: var(--text-mute); font-size: 12px;
+}
+.nu-detail-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+.nu-detail-close:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.25));
+  color: var(--text-strong);
 }
 .nu-detail-tabs {
   display: flex; gap: 0;
