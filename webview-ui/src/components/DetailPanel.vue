@@ -464,11 +464,17 @@ async function onProjectCheck(row: RefRow, checked: boolean) {
 .meta-dep-group { margin: 2px 0; font-size: 11.5px; }
 .meta-dep-group summary { cursor: pointer; color: var(--text-mute); }
 .meta-source { color: var(--text-mute); font-size: 11px; word-break: break-all; }
+.nu-readme, .nu-readme * {
+  /* 全局 body 设置了 user-select:none，这里显式放开，允许选择并复制自述文件内容 */
+  user-select: text;
+  -webkit-user-select: text;
+}
 .nu-readme .readme-body {
   word-break: break-word;
   font-size: 12px; line-height: 1.55;
   padding: 8px 4px;
   color: var(--text-strong);
+  cursor: text;
 }
 .nu-readme .readme-body .md-h { margin: 14px 0 6px; font-weight: 600; }
 .nu-readme .readme-body h1.md-h { font-size: 18px; }
