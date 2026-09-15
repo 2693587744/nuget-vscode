@@ -500,4 +500,33 @@ async function onProjectCheck(row: RefRow, checked: boolean) {
   padding: 4px 8px; font-size: 11px;
 }
 .nu-readme .readme-body a { color: var(--text-link, #4ec9b0); }
+/* NuGet Gallery 返回的是原生标签（无 md-* class），此处补齐基础样式 */
+.nu-readme .readme-body img { max-width: 100%; height: auto; }
+.nu-readme .readme-body p { margin: 6px 0; }
+.nu-readme .readme-body ul, .nu-readme .readme-body ol { padding-left: 20px; margin: 6px 0; }
+.nu-readme .readme-body li { margin: 2px 0; }
+.nu-readme .readme-body code {
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
+  padding: 1px 4px; border-radius: 3px;
+  font-family: var(--vscode-editor-fontFamily, monospace);
+  font-size: 11px;
+}
+.nu-readme .readme-body pre {
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.2));
+  padding: 8px; border-radius: 4px; overflow: auto;
+  font-family: var(--vscode-editor-fontFamily, monospace);
+  font-size: 11px; line-height: 1.5;
+}
+.nu-readme .readme-body pre code { background: transparent; padding: 0; }
+.nu-readme .readme-body table { border-collapse: collapse; margin: 8px 0; }
+.nu-readme .readme-body th, .nu-readme .readme-body td {
+  border: 1px solid var(--vscode-panel-border, #444);
+  padding: 4px 8px; font-size: 11px;
+}
+.nu-readme .readme-body blockquote {
+  margin: 6px 0; padding: 2px 10px;
+  border-left: 3px solid var(--vscode-panel-border, #444);
+  color: var(--text-mute);
+}
+.nu-readme .readme-body hr { border: none; border-top: 1px solid var(--vscode-panel-border, #444); margin: 10px 0; }
 </style>

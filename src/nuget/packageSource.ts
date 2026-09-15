@@ -410,10 +410,16 @@ export async function queryPackageVersions(source: SourceConfig, pkgId: string, 
  *  形如 `https://api.nuget.org/v3/registration5-semver1/{id-lower}/{version-lower}.json`。
  *  这里只做 Level-1 字符串替换（{var} 与 {+var}），不做完整 URL 编码转换。 */
 function expandUriTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{([+\w-]+)\}/g, (_m, key) => {
+  // 占位符名有多种写法：{id} / {version} / {id-lower} / {version-lower} / {lower_id} / {lower_version}
+  const resolve = (key: string): string => {
     const k = key.replace(/^[+-]+/, '');
-    return encodeURIComponent(vars[k] ?? '');
-  });
+    if (vars[k] !== undefined) return vars[k];
+    const norm = k.toLowerCase().replace(/[-_]/g, '');
+    if (norm === 'id' || norm === 'idlower' || norm === 'lowerid') return vars['id'] ?? '';
+    if (norm === 'version' || norm === 'versionlower' || norm === 'lowerversion') return vars['version'] ?? '';
+    return '';
+  };
+  return template.replace(/\{([+\w.-]+)\}/g, (_m, key: string) => encodeURIComponent(resolve(key)));
 }
 
 export interface PackageDependency { id: string; range: string; }
@@ -476,10 +482,10 @@ export async function getPackageDetails(source: SourceConfig, pkgId: string, ver
     } catch { /* catalog 失败时降级用 leaf，避免完全没数据 */ }
   }
 
-  return parseCatalogEntry(detail, source.url);
+  return parseCatalogEntry(detail, source.url, pkgId, version);
 }
 
-function parseCatalogEntry(j: any, sourceUrl: string): PackageMetadata {
+function parseCatalogEntry(j: any, sourceUrl: string, fallbackId = '', fallbackVersion = ''): PackageMetadata {
   const authors = Array.isArray(j?.authors) ? j.authors : (typeof j?.authors === 'string' && j.authors ? j.authors.split(',').map((s: string) => s.trim()) : undefined);
   const owners  = Array.isArray(j?.owners) ? j.owners : undefined;
   const tags    = Array.isArray(j?.tags) ? j.tags : (typeof j?.tags === 'string' && j.tags ? j.tags.split(/[,\s]+/).filter(Boolean) : undefined);
@@ -498,8 +504,10 @@ function parseCatalogEntry(j: any, sourceUrl: string): PackageMetadata {
     }
   }
   // 滥用报告链接：包 ID 上传到 NuGet.org 后，可以构造 abuse 报告 URL
-  const id = j?.id || '';
-  const version = j?.version || '';
+  // catalogEntry 有时缺少 id/version（例如某些第三方源），用调用方传入的参数兜底，
+  // 否则会拼出 https://www.nuget.org/packages// 这类无效链接
+  const id = j?.id || fallbackId;
+  const version = j?.version || fallbackVersion;
   return {
     id,
     version,
@@ -550,10 +558,12 @@ async function fetchNugetGalleryReadme(pkgId: string, version: string): Promise<
   try {
     const html = await fetchRaw(url, 8000, false);
     if (!html) return null;
-    // 提取 <div id="readme-container"> ... </div> 内的 README HTML
-    const re = /<div[^>]*\bid=["']readme-container["'][^>]*>([\s\S]*?)<\/div>\s*(?=<|$)/i;
-    const m = re.exec(html);
-    let body = m ? m[1] : null;
+    // 提取 <div id="readme-container"> ... </div>（按 div 配对，避免被内层 </div> 提前截断）
+    const open = /<div[^>]*\bid=["']readme-container["'][^>]*>/i.exec(html);
+    if (!open) return null;
+    const block = extractDivBlock(html, open.index);
+    if (!block) return null;
+    let body = block.replace(/^<div\b[^>]*>/i, '').replace(/<\/div>\s*$/i, '');
     if (!body) return null;
     // 还原：把相对 src/href 替换为绝对 URL，避免 webview 加载不到图片/链接
     body = body.replace(/src=["'](\/[^"']+)["']/g, (_m, p) => `src="https://www.nuget.org${p}"`);
@@ -583,10 +593,10 @@ async function fetchGithubReadme(projectUrl?: string): Promise<string | null> {
   return null;
 }
 
-/** 取包自述文件。与 VS NuGet 行为一致：
- *  1. 优先读 NuGet Gallery 包页面 #show-readme-container 的渲染 HTML（VS 真实用的来源）；
- *  2. 其次读包的 projectUrl（GitHub 仓库）上的 README；
- *  3. 其次 ReadmeUriTemplate（包内嵌 readme）；
+/** 取包自述文件（统一返回可被 v-html 直接渲染的 HTML）。优先级：
+ *  1. ReadmeUriTemplate（官方 flatcontainer/CDN，返回**完整 Markdown**）——最稳定、内容最全；
+ *  2. NuGet Gallery 包页面的已渲染 HTML；
+ *  3. projectUrl 指向的 GitHub 仓库 README（Markdown）；
  *  4. 兜底 nuspec description / summary。
  *  nugetGalleryUrl 由调用方传入（若包来自官方源会有该 URL）。 */
 export async function getPackageReadme(source: SourceConfig, pkgId: string, version: string, projectUrl?: string, nugetGalleryUrl?: string): Promise<string> {
@@ -594,29 +604,26 @@ export async function getPackageReadme(source: SourceConfig, pkgId: string, vers
   const idx = await getServiceIndex(source);
   const vars = { id: pkgId.toLowerCase(), version: version.toLowerCase() };
 
-  // 1. NuGet Gallery 包页面 README（与 VS 行为一致）
-  //    优先用调用方传的官方 gallery URL；否则 fallback 到源 URL 是官方时构造
-  if (nugetGalleryUrl) {
-    const gallery = await fetchNugetGalleryReadme(pkgId, version);
-    if (gallery) return gallery;
-  } else if (/nuget\.org/i.test(source.url)) {
-    const gallery = await fetchNugetGalleryReadme(pkgId, version);
-    if (gallery) return gallery;
-  }
-
-  // 2. GitHub README
-  if (projectUrl) {
-    const gh = await fetchGithubReadme(projectUrl);
-    if (gh) return gh;
-  }
-
-  // 3. ReadmeUriTemplate（包内嵌 readme）
+  // 1. 包内嵌 README（ReadmeUriTemplate：nuget.org 指向 globalcdn flatcontainer，返回完整 Markdown）
   if (idx.readme) {
     try {
       const url = expandUriTemplate(idx.readme, vars);
       const direct = await fetchRaw(url, 8000, insecure);
-      if (direct) return direct;
+      // 过短的内容通常是占位片段，继续尝试后续来源
+      if (direct && direct.trim().length >= 60) return ensureReadmeHtml(direct);
     } catch { /* 降级 */ }
+  }
+
+  // 2. NuGet Gallery 包页面 README（已是 HTML，展示效果与 VS 一致）
+  if (nugetGalleryUrl || /nuget\.org/i.test(source.url)) {
+    const gallery = await fetchNugetGalleryReadme(pkgId, version);
+    if (gallery) return gallery;
+  }
+
+  // 3. GitHub README（Markdown）
+  if (projectUrl) {
+    const gh = await fetchGithubReadme(projectUrl);
+    if (gh) return ensureReadmeHtml(gh);
   }
 
   // 4. 兜底：nuspec description / summary
@@ -625,9 +632,129 @@ export async function getPackageReadme(source: SourceConfig, pkgId: string, vers
     const parts: string[] = [];
     if (meta.summary) parts.push(meta.summary);
     if (meta.description) parts.push(meta.description);
-    if (parts.length) return parts.join('\n\n');
+    if (parts.length) return `<p class="md-p">${escapeHtml(parts.join('\n\n'))}</p>`;
   } catch { /* ignore */ }
   return '';
+}
+
+/** 内容本身是 HTML 则原样返回，否则按 Markdown 转成 HTML */
+function ensureReadmeHtml(text: string): string {
+  return /<(h[1-6]|p|div|ul|ol|table|pre|blockquote|br)\b/i.test(text) ? text : markdownToHtml(text);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** 轻量 Markdown → HTML：覆盖 README 常见语法，输出与 webview CSS 约定的 md-* class。
+ *  刻意不引入第三方依赖（内网/离线环境也能构建）。 */
+function markdownToHtml(md: string): string {
+  const inline = (s: string): string => {
+    let t = escapeHtml(s);
+    t = t.replace(/`([^`]+)`/g, (_m, c) => `<code class="md-code">${c}</code>`);
+    t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_m, alt, src) => `<img src="${src}" alt="${alt}" />`);
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_m, txt, href) => `<a href="${href}" target="_blank" rel="noopener">${txt}</a>`);
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    return t;
+  };
+
+  const lines = md.replace(/\r\n?/g, '\n').split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 代码块
+    if (/^\s*```/.test(line)) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      out.push(`<pre class="md-pre"><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    // 标题
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      const lv = h[1].length;
+      out.push(`<h${lv} class="md-h">${inline(h[2])}</h${lv}>`);
+      i++;
+      continue;
+    }
+
+    // 水平线
+    if (/^\s*([-*_])\s*\1\s*\1[-*_\s]*$/.test(line)) { out.push('<hr class="md-hr" />'); i++; continue; }
+
+    // 引用
+    if (/^\s*>/.test(line)) {
+      const buf: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+      out.push(`<blockquote class="md-quote">${inline(buf.join(' '))}</blockquote>`);
+      continue;
+    }
+
+    // 表格（表头 + |---| 分隔行）
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*\|?[\s:|-]*$/.test(lines[i + 1])) {
+      const cells = (r: string) => r.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      const head = cells(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+      const thead = `<tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr>`;
+      const tbody = rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('');
+      out.push(`<table class="md-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`);
+      continue;
+    }
+
+    // 列表
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const tag = ordered ? 'ol' : 'ul';
+      const items: string[] = [];
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''));
+        i++;
+      }
+      out.push(`<${tag} class="md-list">${items.map((t) => `<li class="md-li">${inline(t)}</li>`).join('')}</${tag}>`);
+      continue;
+    }
+
+    // 空行
+    if (!line.trim()) { i++; continue; }
+
+    // 段落（合并连续非空且非块级起始的行）
+    const buf: string[] = [line];
+    i++;
+    while (
+      i < lines.length && lines[i].trim() &&
+      !/^\s*(#{1,6}\s|>|```)/.test(lines[i]) &&
+      !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) &&
+      !/^\s*\|/.test(lines[i])
+    ) { buf.push(lines[i]); i++; }
+    out.push(`<p class="md-p">${inline(buf.join('\n'))}</p>`);
+  }
+  return out.join('\n');
+}
+
+/** 从 startIndex（一个 <div ...> 开始标签）起按 div 配对取到配对的 </div>，
+ *  避免非贪婪正则在第一个嵌套 </div> 处提前截断 README。 */
+function extractDivBlock(html: string, startIndex: number): string | null {
+  const re = /<div\b[^>]*>|<\/div>/gi;
+  re.lastIndex = startIndex;
+  let depth = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (m[0].startsWith('</')) {
+      depth--;
+      if (depth === 0) return html.slice(startIndex, m.index + m[0].length);
+    } else {
+      depth++;
+    }
+  }
+  return null;
 }
 
 /** 拿到原始响应文本（不做 JSON 解析） */

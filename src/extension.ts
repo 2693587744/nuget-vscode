@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { spawn } from 'child_process';
 import { findSolutionFiles, parseSolution, createProjectSolution, Solution, PackageReference } from './nuget/solution';
-import { SourceConfig, searchPackages, queryAllPackages, queryPackageVersions, resolveFlatContainerIcons, compareVersions, getPackageDetails, getPackageReadme, PackageSearchResult } from './nuget/packageSource';
+import { SourceConfig, searchPackages, queryAllPackages, queryPackageVersions, resolveFlatContainerIcons, compareVersions, getPackageDetails, getPackageReadme, PackageSearchResult, PackageMetadata } from './nuget/packageSource';
 import { buildRefRows, RefRow, installPackage, uninstallPackage } from './nuget/projectGraph';
 import * as sourceManager from './nuget/sourceManager';
 import { NugetPanel } from './webview/nugetPanel';
@@ -365,14 +365,17 @@ NugetPanel.bus.on('getPackageMetadata', async ({ packageId, version }: { package
     try { readme = await getPackageReadme(src, packageId, version, meta.projectUrl, meta.nugetGalleryUrl); } catch { /* readme 失败不影响整体 */ }
     return { src, meta, readme };
   }));
+  const ok: { src: SourceConfig; meta: PackageMetadata; readme: string }[] = [];
   for (const r of results) {
-    if (r.status === 'fulfilled') {
-      const { meta, readme, src } = r.value;
-      return { meta, readme, source: src };
-    }
+    if (r.status === 'fulfilled') ok.push(r.value);
   }
-  // 所有源都拿不到 metadata
-  throw new Error('所有包源均无法读取包元数据');
+  if (!ok.length) {
+    // 所有源都拿不到 metadata
+    throw new Error('所有包源均无法读取包元数据');
+  }
+  // 优先返回能取到自述文件的结果，避免第一个源没有 README 时被误显示为空
+  const chosen = ok.find((x) => !!x.readme) || ok[0];
+  return { meta: chosen.meta, readme: chosen.readme, source: chosen.src };
 });
 
 NugetPanel.bus.on('getUpdateCandidates', async ({ includePrerelease }: { includePrerelease: boolean }) => {
