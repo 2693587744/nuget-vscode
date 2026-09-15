@@ -1,8 +1,5 @@
 node_modules/
 dist/
-# 忽略 .vscode 下的个人设置，但保留调试配置，保证 clone 后可直接 F5 调试
-.vscode/*
-!.vscode/launch.json
-!.vscode/tasks.json
+.vscode/
 *.log
 *.vsix

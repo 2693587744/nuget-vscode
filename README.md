@@ -99,13 +99,58 @@ npm run build
 
 ### 3. 启动调试（推荐）
 
+> 仓库不包含 `.vscode` 目录，首次调试请先在仓库根目录创建下面两个文件。
+
+**`.vscode/tasks.json`**（把 `npm run build` 注册为默认构建任务）：
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build All",
+      "type": "npm",
+      "script": "build",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}
+```
+
+**`.vscode/launch.json`**（扩展开发宿主调试配置）：
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run NuGet Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/dist/extension.js",
+        "${workspaceFolder}/dist/webview/assets/index.js"
+      ],
+      "preLaunchTask": "${defaultBuildTask}"
+    }
+  ]
+}
+```
+
+> 若希望宿主启动后自动打开某个测试项目，在 `args` 中追加它的目录路径即可，例如：
+> `"args": ["--extensionDevelopmentPath=${workspaceFolder}", "D:/projects/MySolution"]`。
+
+然后：
+
 1. 用 VS Code 打开本仓库目录（`nuget-vscode`）。
-2. 按 <kbd>F5</kbd>，或在「运行和调试」面板选择 **Run NuGet Extension**（对应 `.vscode/launch.json`）。
+2. 按 <kbd>F5</kbd>，或在「运行和调试」面板选择 **Run NuGet Extension**。
    - 会先自动执行默认构建任务 `npm run build`
    - 随后弹出「扩展开发宿主」窗口，扩展即在该窗口中生效
 3. 在宿主窗口里打开任意包含 `.sln` / `.slnx` / `.csproj` 的项目，在资源管理器中右键选择 **「管理解决方案的 NuGet 程序包(N)...」** 即可打开面板。
-
-> `.vscode/launch.json` 中 `args` 的第二个参数是"联动打开的测试项目目录"，默认指向一个本地示例项目。请把它改成你自己的解决方案目录，或删除该参数（宿主将打开空窗口，手动打开项目即可）。
 
 ### 4. 修改代码后如何生效
 
